@@ -28,6 +28,11 @@ def _default_config() -> dict:
             "battery_low": 20,
             "battery_critical": 10,
         },
+        "cleaner": {
+            "pacman_keep_versions": 2,
+            "journal_max_size": "100M",
+            "tmp_max_age_days": 7,
+        },
         "blacklist": {},
         "profiles": {
             "max_performance": {
@@ -98,6 +103,12 @@ class ConfigManager:
     @property
     def alerts(self) -> dict:
         return self._data.get("alerts", {})
+
+    # --- Cleaner ---
+
+    @property
+    def cleaner(self) -> dict:
+        return self._data.get("cleaner", {})
 
     # --- Blacklist ---
 

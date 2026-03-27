@@ -13,6 +13,7 @@ from sysward.services.collector_manager import CollectorManager
 from sysward.services.profile_manager import ProfileManager
 from sysward.services.process_manager import ProcessManager
 from sysward.services.alert_manager import AlertManager
+from sysward.services.disk_cleaner import DiskCleanerService
 from sysward.theme import THEMES, next_theme
 from sysward.widgets.header_bar import HeaderBar
 from sysward.widgets.hint_bar import HintBar
@@ -23,6 +24,7 @@ from sysward.screens.disk_detail import DiskDetailScreen
 from sysward.screens.network_detail import NetworkDetailScreen
 from sysward.screens.process_screen import ProcessScreen
 from sysward.screens.systemd_screen import SystemdScreen
+from sysward.screens.cleaner_screen import CleanerScreen
 from sysward.screens.profile_screen import ProfileScreen
 from sysward.screens.confirm_dialog import ConfirmDialog
 
@@ -105,6 +107,7 @@ class SyswardApp(App):
         Binding("5", "tab('network')", "Network", show=False, priority=True),
         Binding("6", "tab('process')", "Processes", show=False, priority=True),
         Binding("7", "tab('systemd')", "Services", show=False, priority=True),
+        Binding("8", "tab('cleaner')", "Cleaner", show=False, priority=True),
         Binding("p", "profiles", "Profiles", show=False, priority=True),
         Binding("T", "cycle_theme", "Theme", show=False, priority=True),
         Binding("k", "kill_process", "Kill", show=False),
@@ -112,6 +115,11 @@ class SyswardApp(App):
         Binding("r", "resume_process", "Resume", show=False),
         Binding("b", "blacklist_process", "Blacklist", show=False),
         Binding("slash", "toggle_filter", "Filter", show=False),
+        Binding("c", "clean_selected", "Clean", show=False),
+        Binding("space", "toggle_clean_select", "Toggle", show=False),
+        Binding("a", "select_all_clean", "All", show=False),
+        Binding("n", "deselect_all_clean", "None", show=False),
+        Binding("d", "show_clean_detail", "Detail", show=False),
         Binding("q", "quit_app", "Quit", show=False, priority=True),
     ]
 
@@ -122,6 +130,7 @@ class SyswardApp(App):
         self.profile_manager = ProfileManager()
         self.process_manager = ProcessManager()
         self.alert_manager = AlertManager()
+        self.disk_cleaner = DiskCleanerService()
         self._active_tab = "overview"
 
     def compose(self) -> ComposeResult:
@@ -141,8 +150,10 @@ class SyswardApp(App):
                 yield ProcessScreen(id="process-screen")
             with TabPane("Services", id="systemd"):
                 yield SystemdScreen(id="systemd-screen")
+            with TabPane("Cleaner", id="cleaner"):
+                yield CleanerScreen(id="cleaner-screen")
         yield HintBar(
-            "[k]1-7[/k] Tabs  [k]p[/k] Profiles  [k]T[/k] Theme  [k]q[/k] Quit",
+            "[k]1-8[/k] Tabs  [k]p[/k] Profiles  [k]T[/k] Theme  [k]q[/k] Quit",
             id="hints",
         )
 
@@ -165,6 +176,9 @@ class SyswardApp(App):
             self.query_one("#header", HeaderBar).update_info(
                 profile=profile.replace("_", " ").title()
             )
+
+        # Pass cleaner config
+        self.disk_cleaner.update_config(self.config_manager.cleaner)
 
         # Start collection loops
         self._run_fast_collector()
@@ -236,6 +250,8 @@ class SyswardApp(App):
                 self.query_one("#process-screen", ProcessScreen).update_metrics(metrics, history)
             elif active == "systemd":
                 self.query_one("#systemd-screen", SystemdScreen).update_metrics(metrics, history)
+            elif active == "cleaner":
+                pass  # Cleaner is on-demand, no periodic update
         except Exception:
             pass
 
@@ -249,12 +265,16 @@ class SyswardApp(App):
         hints = self.query_one("#hints", HintBar)
         if tab_id == "process":
             hints.set_hints(
-                "[k]k[/k] Kill  [k]s[/k] Stop  [k]r[/k] Resume  [k]b[/k] Blacklist  [k]/[/k] Filter  [k]1-7[/k] Tabs"
+                "[k]k[/k] Kill  [k]s[/k] Stop  [k]r[/k] Resume  [k]b[/k] Blacklist  [k]/[/k] Filter  [k]1-8[/k] Tabs"
             )
         elif tab_id == "systemd":
-            hints.set_hints("[k]/[/k] Filter  [k]1-7[/k] Tabs  [k]p[/k] Profiles  [k]q[/k] Quit")
+            hints.set_hints("[k]/[/k] Filter  [k]1-8[/k] Tabs  [k]p[/k] Profiles  [k]q[/k] Quit")
+        elif tab_id == "cleaner":
+            hints.set_hints(
+                "[k]s[/k] Scan  [k]Space[/k] Toggle  [k]a[/k] All  [k]n[/k] None  [k]c[/k] Clean  [k]d[/k] Detail  [k]1-8[/k] Tabs"
+            )
         else:
-            hints.set_hints("[k]1-7[/k] Tabs  [k]p[/k] Profiles  [k]T[/k] Theme  [k]q[/k] Quit")
+            hints.set_hints("[k]1-8[/k] Tabs  [k]p[/k] Profiles  [k]T[/k] Theme  [k]q[/k] Quit")
 
     def action_profiles(self) -> None:
         profiles = self.config_manager.profiles
@@ -305,6 +325,9 @@ class SyswardApp(App):
         )
 
     def action_stop_process(self) -> None:
+        if self._active_tab == "cleaner":
+            self._run_scan()
+            return
         if self._active_tab != "process":
             return
         pid = self.query_one("#process-screen", ProcessScreen).get_selected_pid()
@@ -358,6 +381,103 @@ class SyswardApp(App):
             self.query_one("#process-screen", ProcessScreen).toggle_filter()
         elif self._active_tab == "systemd":
             self.query_one("#systemd-screen", SystemdScreen).toggle_filter()
+
+    # --- Cleaner actions ---
+
+    @work(thread=True)
+    def _run_scan(self) -> None:
+        screen = self.query_one("#cleaner-screen", CleanerScreen)
+        if screen.is_scanning:
+            return
+        self.call_from_thread(screen.set_scanning)
+        results = self.disk_cleaner.scan_all()
+        self.call_from_thread(screen.set_scan_results, results)
+        count = len(results)
+        self.call_from_thread(
+            self.notify,
+            f"Scan complete: {count} categories found",
+            severity="information",
+            timeout=3,
+        )
+
+    def action_toggle_clean_select(self) -> None:
+        if self._active_tab != "cleaner":
+            return
+        self.query_one("#cleaner-screen", CleanerScreen).toggle_select()
+
+    def action_select_all_clean(self) -> None:
+        if self._active_tab != "cleaner":
+            return
+        self.query_one("#cleaner-screen", CleanerScreen).select_all()
+
+    def action_deselect_all_clean(self) -> None:
+        if self._active_tab != "cleaner":
+            return
+        self.query_one("#cleaner-screen", CleanerScreen).deselect_all()
+
+    def action_show_clean_detail(self) -> None:
+        if self._active_tab != "cleaner":
+            return
+        self.query_one("#cleaner-screen", CleanerScreen).show_detail()
+
+    def action_clean_selected(self) -> None:
+        if self._active_tab != "cleaner":
+            return
+        screen = self.query_one("#cleaner-screen", CleanerScreen)
+        selected = screen.get_selected_categories()
+        if not selected:
+            self.notify("No categories selected", severity="warning")
+            return
+
+        total_bytes = screen.get_selected_total_bytes()
+        results = screen.scan_results
+        root_cats = [
+            r.display_name for r in results
+            if r.category_id in selected and r.needs_root
+        ]
+
+        # Build confirmation message
+        from sysward.widgets.cleaner_table import _fmt_bytes
+        msg = f"Clean {len(selected)} categories?\nEstimated space: {_fmt_bytes(total_bytes)}"
+        if root_cats:
+            msg += f"\n\nRoot required for:\n- " + "\n- ".join(root_cats)
+            msg += "\n\npkexec will prompt for authentication."
+
+        def on_confirm(confirmed: bool) -> None:
+            if confirmed:
+                self._run_clean(selected, results)
+
+        self.push_screen(
+            ConfirmDialog("Disk Cleanup", msg),
+            callback=on_confirm,
+        )
+
+    @work(thread=True)
+    def _run_clean(self, selected: set[str], scan_results: list) -> None:
+        screen = self.query_one("#cleaner-screen", CleanerScreen)
+        self.call_from_thread(screen.set_cleaning)
+        outcomes = self.disk_cleaner.clean(selected, scan_results)
+
+        total_freed = sum(freed for _, ok, freed, _ in outcomes if ok)
+        failed = [msg for _, ok, _, msg in outcomes if not ok]
+
+        from sysward.widgets.cleaner_table import _fmt_bytes
+        if failed:
+            summary = f"Freed {_fmt_bytes(total_freed)} | {len(failed)} failed"
+            self.call_from_thread(screen.set_clean_done, summary)
+            self.call_from_thread(
+                self.notify, summary, severity="warning", timeout=5
+            )
+        else:
+            summary = f"Freed {_fmt_bytes(total_freed)}"
+            self.call_from_thread(screen.set_clean_done, summary)
+            self.call_from_thread(
+                self.notify, summary, severity="information", timeout=3
+            )
+
+        # Auto re-scan
+        results = self.disk_cleaner.scan_all()
+        self.call_from_thread(screen.set_scan_results, results)
 
     def action_quit_app(self) -> None:
         self.collector_manager.stop()

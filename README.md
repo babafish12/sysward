@@ -8,7 +8,7 @@ A terminal-based system monitor and performance manager built for Arch Linux. Sy
 
 ## What This Does
 
-Sysward reads directly from `/proc` and `/sys` — no external monitoring daemons, no psutil dependency. It collects hardware metrics at two intervals (fast: 1s for CPU/RAM/GPU/sensors/network/battery, slow: 5s for disk/processes/systemd) and displays them across 7 tabbed screens with sparkline history, color-coded usage bars, and configurable alerts.
+Sysward reads directly from `/proc` and `/sys` — no external monitoring daemons, no psutil dependency. It collects hardware metrics at two intervals (fast: 1s for CPU/RAM/GPU/sensors/network/battery, slow: 5s for disk/processes/systemd) and displays them across 8 tabbed screens with sparkline history, color-coded usage bars, and configurable alerts.
 
 It also includes a **performance profile manager** that can switch between `max_performance`, `balanced`, and `powersave` modes by writing CPU governor, turbo boost, and energy performance preference settings directly to sysfs.
 
@@ -21,6 +21,7 @@ It also includes a **performance profile manager** that can switch between `max_
 - **Network Detail** — per-interface RX/TX rates, state indicators
 - **Process Manager** — sortable/filterable process table with kill (SIGTERM), stop (SIGSTOP), resume (SIGCONT), and process blacklisting
 - **Systemd Services** — filterable service list showing unit state and sub-state
+- **Disk Cleaner** — scan and reclaim disk space from pacman cache, orphaned packages, journal logs, coredumps, trash, user cache, old logs, and backup files — with category selection, detail view, and root operation support via pkexec
 - **Performance Profiles** — switch between predefined CPU governor/turbo/EPP profiles via a single keypress
 - **Configurable Alerts** — warnings for high CPU temp, CPU usage, RAM usage, and low battery
 - **Process Blacklist** — automatically stop or kill processes that match a configured list
@@ -40,11 +41,25 @@ It also includes a **performance profile manager** that can switch between `max_
 
 ### Installation
 
+**Global install (recommended):**
+
+```bash
+pipx install git+https://github.com/babafish12/sysward.git
+```
+
+**From source:**
+
 ```bash
 git clone https://github.com/babafish12/sysward.git
 cd sysward
-python -m venv .venv
-source .venv/bin/activate
+pipx install .
+```
+
+**Development (editable):**
+
+```bash
+git clone https://github.com/babafish12/sysward.git
+cd sysward
 pip install -e .
 ```
 
@@ -64,7 +79,7 @@ sudo sysward
 
 | Key | Action |
 |-----|--------|
-| `1`-`7` | Switch tabs (Overview, CPU, Memory, Disk, Network, Processes, Services) |
+| `1`-`8` | Switch tabs (Overview, CPU, Memory, Disk, Network, Processes, Services, Cleaner) |
 | `p` | Open performance profile selector |
 | `T` | Cycle through themes |
 | `k` | Kill selected process (SIGTERM) |
@@ -72,6 +87,12 @@ sudo sysward
 | `r` | Resume selected process (SIGCONT) |
 | `b` | Add selected process to blacklist |
 | `/` | Toggle filter in process/service views |
+| `s` | Scan for reclaimable space (Cleaner tab) |
+| `Space` | Toggle category selection (Cleaner tab) |
+| `a` | Select all categories (Cleaner tab) |
+| `n` | Deselect all categories (Cleaner tab) |
+| `c` | Clean selected categories (Cleaner tab) |
+| `d` | Show detail for highlighted category (Cleaner tab) |
 | `q` | Quit |
 
 ## Configuration
@@ -109,6 +130,11 @@ governor = "powersave"
 turbo = false
 epp = "power"
 
+[cleaner]
+pacman_keep_versions = 2    # keep N most recent package versions
+journal_max_size = "100M"   # vacuum journal logs to this size
+tmp_max_age_days = 7        # only clean temp files older than N days
+
 [blacklist]
 # process_name = "stop" or "kill"
 ```
@@ -135,12 +161,14 @@ sysward/
 ├── models/
 │   ├── config.py          # TOML config manager
 │   ├── profile.py         # PerformanceProfile dataclass
+│   ├── clean_item.py      # CleanItem/ScanResult dataclasses for disk cleaner
 │   ├── blacklist_entry.py # Blacklist entry model
 │   └── history.py         # RingBuffer for sparkline data
 ├── services/
 │   ├── collector_manager.py  # Orchestrates fast/slow collection cycles
 │   ├── profile_manager.py    # Applies CPU governor/turbo/EPP to sysfs
 │   ├── process_manager.py    # kill/stop/resume via os.kill + blacklist enforcement
+│   ├── disk_cleaner.py       # Disk space scanner and cleaner
 │   ├── alert_manager.py      # Threshold-based alerts with cooldown
 │   └── privilege.py          # Root privilege detection
 ├── widgets/
@@ -149,6 +177,7 @@ sysward/
 │   ├── header_bar.py      # Hostname, CPU model, uptime, active profile
 │   ├── hint_bar.py        # Dynamic keybinding hints
 │   ├── process_table.py   # Sortable process DataTable
+│   ├── cleaner_table.py   # Disk cleaner category DataTable
 │   └── service_table.py   # Filterable systemd service DataTable
 └── screens/
     ├── overview.py        # Dashboard with 4 metric cards + info lines
@@ -158,6 +187,7 @@ sysward/
     ├── network_detail.py  # Per-interface rates
     ├── process_screen.py  # Process table with filter
     ├── systemd_screen.py  # Service table with filter
+    ├── cleaner_screen.py  # Disk cleaner with scan/select/clean workflow
     ├── profile_screen.py  # Profile selector modal
     └── confirm_dialog.py  # Yes/No confirmation dialog
 ```
@@ -184,5 +214,16 @@ MIT
 
 ## Changelog
 
-### 2026-03-25
+### 2026-03-27
+
+- Added pipx as recommended installation method
+- Updated README installation instructions
+
+### 2026-03-25 — v0.2.0
+- Added Disk Cleaner tab (Tab 8): scan and reclaim space from pacman cache, orphaned packages, journal logs, coredumps, trash, user cache, old logs, and backup files
+- Category-based selection with detail view for individual items
+- Root operations bundled via pkexec for single authentication prompt
+- Configurable thresholds for pacman versions to keep, journal max size, and temp file age
+
+### 2026-03-25 — v0.1.0
 - Initial release with 7 monitoring tabs, performance profiles, process management, alerts, 6 themes, and TOML configuration
