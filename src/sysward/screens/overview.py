@@ -1,15 +1,14 @@
-"""Overview screen — main dashboard with summary metric cards."""
+"""Overview screen -- btop-inspired dashboard."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, Grid
-from textual.widgets import Static
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Static, Sparkline
 
-from sysward.widgets.metric_card import MetricCard
-from sysward.widgets.usage_bar import UsageBar
+from sysward.widgets.gauge import Gauge
 
 
 def _fmt_bytes(b: int | float) -> str:
@@ -31,111 +30,196 @@ def _fmt_rate(b: float) -> str:
 
 
 class OverviewScreen(Vertical):
-    """Main overview tab content."""
+    """btop-inspired overview dashboard."""
 
     DEFAULT_CSS = """
     OverviewScreen {
         height: 1fr;
         padding: 1;
     }
-    OverviewScreen #cards-row {
+
+    /* Top row: CPU + RAM panels side by side */
+    OverviewScreen #top-row {
         height: auto;
-        min-height: 8;
+        min-height: 7;
     }
-    OverviewScreen #extra-info {
+    OverviewScreen .metric-panel {
+        width: 1fr;
         height: auto;
-        margin-top: 1;
+        min-height: 6;
+        border: round $panel;
+        background: $surface;
         padding: 0 1;
+        margin: 0 1 1 0;
     }
-    OverviewScreen .info-line {
+    OverviewScreen .panel-title {
+        color: $primary;
+        text-style: bold;
         height: 1;
+    }
+    OverviewScreen .panel-detail {
+        height: 1;
+        color: $foreground;
+    }
+    OverviewScreen Sparkline {
+        height: 2;
+    }
+
+    /* Middle row: GPU + Battery + Temps */
+    OverviewScreen #mid-row {
+        height: auto;
+        min-height: 4;
+        margin-bottom: 1;
+    }
+    OverviewScreen .mid-panel {
+        width: 1fr;
+        height: auto;
+        border: round $panel;
+        background: $surface;
+        padding: 0 1;
+        margin: 0 1 0 0;
+    }
+
+    /* Bottom row: Net + Disk + Fan */
+    OverviewScreen #bot-row {
+        height: auto;
+        min-height: 3;
+    }
+    OverviewScreen .bot-panel {
+        width: 1fr;
+        height: auto;
+        border: round $panel;
+        background: $surface;
+        padding: 0 1;
+        margin: 0 1 0 0;
     }
     """
 
     def compose(self) -> ComposeResult:
-        with Grid(id="cards-row"):
-            yield MetricCard("CPU", id="cpu-card")
-            yield MetricCard("RAM", id="ram-card")
-            yield MetricCard("GPU", id="gpu-card")
-            yield MetricCard("Battery", id="bat-card")
-        with Vertical(id="extra-info"):
-            yield Static("", classes="info-line", id="sensor-info")
-            yield Static("", classes="info-line", id="net-info")
-            yield Static("", classes="info-line", id="disk-info")
+        # Top: CPU + RAM with gauges and sparklines
+        with Horizontal(id="top-row"):
+            with Vertical(classes="metric-panel"):
+                yield Static("CPU", classes="panel-title")
+                yield Gauge("Usage", id="cpu-gauge")
+                yield Static("", id="cpu-detail", classes="panel-detail")
+                yield Sparkline([], id="cpu-spark")
+            with Vertical(classes="metric-panel"):
+                yield Static("Memory", classes="panel-title")
+                yield Gauge("RAM", id="ram-gauge")
+                yield Static("", id="ram-detail", classes="panel-detail")
+                yield Sparkline([], id="ram-spark")
 
-    def on_mount(self) -> None:
-        # Style the grid
-        grid = self.query_one("#cards-row", Grid)
-        grid.styles.grid_size_columns = 2
-        grid.styles.grid_size_rows = 2
-        grid.styles.grid_gutter_horizontal = 1
-        grid.styles.grid_gutter_vertical = 1
+        # Middle: GPU + Battery + Temps
+        with Horizontal(id="mid-row"):
+            with Vertical(classes="mid-panel"):
+                yield Static("GPU", classes="panel-title")
+                yield Gauge("Freq", id="gpu-gauge")
+                yield Static("", id="gpu-detail", classes="panel-detail")
+            with Vertical(classes="mid-panel"):
+                yield Static("Battery", classes="panel-title")
+                yield Gauge("Charge", id="bat-gauge", warn_threshold=30, crit_threshold=15)
+                yield Static("", id="bat-detail", classes="panel-detail")
+            with Vertical(classes="mid-panel"):
+                yield Static("Temperatures", classes="panel-title")
+                yield Static("", id="temp-info")
+
+        # Bottom: Network + Disk + Fan
+        with Horizontal(id="bot-row"):
+            with Vertical(classes="bot-panel"):
+                yield Static("Network", classes="panel-title")
+                yield Static("", id="net-info")
+            with Vertical(classes="bot-panel"):
+                yield Static("Disk I/O", classes="panel-title")
+                yield Static("", id="disk-info")
+            with Vertical(classes="bot-panel"):
+                yield Static("Fans", classes="panel-title")
+                yield Static("", id="fan-info")
 
     def update_metrics(self, metrics: dict[str, Any], history: dict) -> None:
-        """Update all cards with latest metrics."""
         # CPU
         cpu = metrics.get("cpu", {})
-        cpu_card = self.query_one("#cpu-card", MetricCard)
         cpu_usage = cpu.get("usage", 0)
         freq = cpu.get("freq_avg", 0)
         gov = cpu.get("governor", "?")
-        cpu_card.value = cpu_usage
-        cpu_card.detail_text = f"{freq:.0f} MHz | {gov}"
+        cores = cpu.get("core_count", 0)
+        try:
+            self.query_one("#cpu-gauge", Gauge).value = cpu_usage
+            self.query_one("#cpu-detail", Static).update(
+                f"{cores}C | {freq:.0f} MHz | {gov}"
+            )
+        except Exception:
+            pass
         cpu_hist = history.get("cpu_usage")
         if cpu_hist:
-            cpu_card.update_sparkline(cpu_hist.last_n(60))
+            try:
+                self.query_one("#cpu-spark", Sparkline).data = cpu_hist.last_n(60)
+            except Exception:
+                pass
 
         # RAM
         mem = metrics.get("memory", {})
-        ram_card = self.query_one("#ram-card", MetricCard)
         ram_pct = mem.get("usage_percent", 0)
         ram_used = mem.get("used", 0)
         ram_total = mem.get("total", 0)
-        ram_card.value = ram_pct
-        ram_card.detail_text = f"{_fmt_bytes(ram_used)} / {_fmt_bytes(ram_total)}"
+        try:
+            self.query_one("#ram-gauge", Gauge).value = ram_pct
+            self.query_one("#ram-detail", Static).update(
+                f"{_fmt_bytes(ram_used)} / {_fmt_bytes(ram_total)}"
+            )
+        except Exception:
+            pass
         ram_hist = history.get("ram_usage")
         if ram_hist:
-            ram_card.update_sparkline(ram_hist.last_n(60))
+            try:
+                self.query_one("#ram-spark", Sparkline).data = ram_hist.last_n(60)
+            except Exception:
+                pass
 
         # GPU
         gpu = metrics.get("gpu", {})
-        gpu_card = self.query_one("#gpu-card", MetricCard)
         gpu_freq = gpu.get("freq_cur", 0)
         gpu_max = gpu.get("freq_max", 1)
         gpu_pct = (gpu_freq / gpu_max * 100) if gpu_max > 0 else 0
-        gpu_card.value = gpu_pct
-        gpu_card.detail_text = f"{gpu_freq} / {gpu_max} MHz"
-        gpu_hist = history.get("gpu_freq")
-        if gpu_hist:
-            gpu_card.update_sparkline(gpu_hist.last_n(60))
-
-        # Battery
-        bat = metrics.get("battery", {})
-        bat_card = self.query_one("#bat-card", MetricCard)
-        bat_cap = bat.get("capacity", 0)
-        bat_status = bat.get("status", "Unknown")
-        power = bat.get("power_draw", 0)
-        bat_card.value = float(bat_cap)
-        detail = bat_status
-        if power:
-            detail += f" | {power:.1f}W"
-        bat_card.detail_text = detail
-
-        # Sensor info line
-        sensors = metrics.get("sensors", {})
-        pkg_temp = sensors.get("package_temp", 0)
-        fan_rpm = sensors.get("fan_rpm", 0)
-        sensor_str = ""
-        if pkg_temp:
-            sensor_str += f"Package: {pkg_temp:.0f}°C"
-        if fan_rpm:
-            sensor_str += f"  Fan: {fan_rpm} RPM"
         try:
-            self.query_one("#sensor-info", Static).update(sensor_str)
+            self.query_one("#gpu-gauge", Gauge).value = gpu_pct
+            self.query_one("#gpu-detail", Static).update(f"{gpu_freq} / {gpu_max} MHz")
         except Exception:
             pass
 
-        # Network info line
+        # Battery
+        bat = metrics.get("battery", {})
+        bat_cap = bat.get("capacity", 0)
+        bat_status = bat.get("status", "Unknown")
+        power = bat.get("power_draw", 0)
+        try:
+            self.query_one("#bat-gauge", Gauge).value = float(bat_cap)
+            detail = bat_status
+            if power:
+                detail += f" | {power:.1f}W"
+            self.query_one("#bat-detail", Static).update(detail)
+        except Exception:
+            pass
+
+        # Temperatures
+        sensors = metrics.get("sensors", {})
+        pkg_temp = sensors.get("package_temp", 0)
+        cpu_temps = sensors.get("cpu_temps", {})
+        nvme_temps = sensors.get("nvme_temps", {})
+        wifi_temps = sensors.get("wifi_temps", {})
+        temp_parts = []
+        if pkg_temp:
+            color = "red" if pkg_temp >= 80 else "yellow" if pkg_temp >= 60 else "green"
+            temp_parts.append(f"CPU: {pkg_temp:.0f}\u00b0C")
+        for label, val in list(nvme_temps.items())[:2]:
+            temp_parts.append(f"NVMe: {val:.0f}\u00b0C")
+        for label, val in list(wifi_temps.items())[:1]:
+            temp_parts.append(f"WiFi: {val:.0f}\u00b0C")
+        try:
+            self.query_one("#temp-info", Static).update("  ".join(temp_parts) if temp_parts else "No sensors")
+        except Exception:
+            pass
+
+        # Network
         net = metrics.get("network", {})
         ifaces = net.get("interfaces", [])
         net_parts = []
@@ -144,21 +228,29 @@ class OverviewScreen(Vertical):
                 name = iface["name"]
                 rx = _fmt_rate(iface.get("rx_rate", 0))
                 tx = _fmt_rate(iface.get("tx_rate", 0))
-                net_parts.append(f"{name} ↓{rx} ↑{tx}")
+                net_parts.append(f"{name} \u2193{rx} \u2191{tx}")
         try:
-            self.query_one("#net-info", Static).update("  ".join(net_parts) if net_parts else "")
+            self.query_one("#net-info", Static).update("\n".join(net_parts) if net_parts else "No active interfaces")
         except Exception:
             pass
 
-        # Disk info line
+        # Disk I/O
         disk = metrics.get("disk", {})
         devs = disk.get("devices", [])
         disk_parts = []
         for dev in devs:
             r = _fmt_rate(dev.get("read_bytes_s", 0))
             w = _fmt_rate(dev.get("write_bytes_s", 0))
-            disk_parts.append(f"{dev['name']} R {r}  W {w}")
+            disk_parts.append(f"{dev['name']} R:{r} W:{w}")
         try:
-            self.query_one("#disk-info", Static).update("  ".join(disk_parts) if disk_parts else "")
+            self.query_one("#disk-info", Static).update("\n".join(disk_parts) if disk_parts else "No disk I/O")
+        except Exception:
+            pass
+
+        # Fan info
+        fan_rpm = sensors.get("fan_rpm", 0)
+        try:
+            fan_str = f"{fan_rpm} RPM" if fan_rpm else "No fan data"
+            self.query_one("#fan-info", Static).update(fan_str)
         except Exception:
             pass

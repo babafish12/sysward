@@ -15,12 +15,14 @@ from sysward.collectors.disk import DiskCollector
 from sysward.collectors.network import NetworkCollector
 from sysward.collectors.process import ProcessCollector
 from sysward.collectors.systemd import SystemdCollector
+from sysward.collectors.sysinfo import SysInfoCollector
+from sysward.collectors.fan import FanCollector
 from sysward.models.history import RingBuffer
 
 
 # Collector categories
-FAST_COLLECTORS = ["cpu", "memory", "gpu", "battery", "sensors", "network"]
-SLOW_COLLECTORS = ["disk", "process", "systemd"]
+FAST_COLLECTORS = ["cpu", "memory", "gpu", "battery", "sensors", "network", "fan"]
+SLOW_COLLECTORS = ["disk", "process", "systemd", "sysinfo"]
 
 
 class CollectorManager:
@@ -35,6 +37,7 @@ class CollectorManager:
             "net_rx": RingBuffer(),
             "net_tx": RingBuffer(),
             "cpu_temp": RingBuffer(),
+            "fan_rpm": RingBuffer(),
         }
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -51,6 +54,8 @@ class CollectorManager:
             "network": NetworkCollector(),
             "process": ProcessCollector(),
             "systemd": SystemdCollector(),
+            "sysinfo": SysInfoCollector(),
+            "fan": FanCollector(),
         }
         for name, collector in candidates.items():
             try:
@@ -97,6 +102,14 @@ class CollectorManager:
 
         cpu_temp = results.get("sensors", {}).get("package_temp", 0)
         self._history["cpu_temp"].push(cpu_temp)
+
+        fan_rpm = results.get("sensors", {}).get("fan_rpm", 0)
+        if fan_rpm == 0:
+            # Fallback to dedicated fan collector data
+            fan_fans = results.get("fan", {}).get("fans", {})
+            if fan_fans:
+                fan_rpm = max(fan_fans.values())
+        self._history["fan_rpm"].push(fan_rpm)
 
         # Net throughput
         ifaces = results.get("network", {}).get("interfaces", [])

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from sysward.models.profile import PerformanceProfile
-from sysward.services.privilege import write_sysfs, write_sysfs_privileged
+from sysward.services.privilege import write_sysfs, write_sysfs_batch_privileged
 
 _CPU_BASE = Path("/sys/devices/system/cpu")
 _NO_TURBO = _CPU_BASE / "intel_pstate" / "no_turbo"
@@ -58,8 +58,6 @@ class ProfileManager:
 
     def apply(self, profile: PerformanceProfile) -> tuple[bool, str]:
         """Apply a performance profile. Returns (success, message)."""
-        errors: list[str] = []
-
         # Count CPUs
         cpu_count = 0
         while (_CPU_BASE / f"cpu{cpu_count}" / "cpufreq").exists():
@@ -67,32 +65,32 @@ class ProfileManager:
         if cpu_count == 0:
             return False, "No CPUs with cpufreq found"
 
-        # Set governor
+        # Collect all writes — try direct first, queue failures for pkexec
+        pending: list[tuple[Path, str]] = []
+
+        # Governor
         for i in range(cpu_count):
             gov_path = _CPU_BASE / f"cpu{i}" / "cpufreq" / "scaling_governor"
             if not write_sysfs(gov_path, profile.governor):
-                if not write_sysfs_privileged(gov_path, profile.governor):
-                    errors.append(f"Failed to set governor on cpu{i}")
-                    break
+                pending.append((gov_path, profile.governor))
 
-        # Set turbo (intel_pstate: no_turbo is inverted)
+        # Turbo (intel_pstate: no_turbo is inverted)
         if _NO_TURBO.exists():
             turbo_val = "0" if profile.turbo else "1"
             if not write_sysfs(_NO_TURBO, turbo_val):
-                if not write_sysfs_privileged(_NO_TURBO, turbo_val):
-                    errors.append("Failed to set turbo")
+                pending.append((_NO_TURBO, turbo_val))
 
-        # Set EPP
+        # EPP
         for i in range(cpu_count):
             epp_path = _CPU_BASE / f"cpu{i}" / "cpufreq" / "energy_performance_preference"
             if epp_path.exists():
                 if not write_sysfs(epp_path, profile.epp):
-                    if not write_sysfs_privileged(epp_path, profile.epp):
-                        errors.append(f"Failed to set EPP on cpu{i}")
-                        break
+                    pending.append((epp_path, profile.epp))
 
-        if errors:
-            return False, "; ".join(errors)
+        # Single pkexec call for all privileged writes
+        if pending:
+            if not write_sysfs_batch_privileged(pending):
+                return False, f"Failed to apply profile (pkexec denied for {len(pending)} writes)"
 
         self._active_profile = profile.name
         return True, f"Applied profile: {profile.display_name}"

@@ -8,22 +8,26 @@ A terminal-based system monitor and performance manager built for Arch Linux. Sy
 
 ## What This Does
 
-Sysward reads directly from `/proc` and `/sys` — no external monitoring daemons, no psutil dependency. It collects hardware metrics at two intervals (fast: 1s for CPU/RAM/GPU/sensors/network/battery, slow: 5s for disk/processes/systemd) and displays them across 8 tabbed screens with sparkline history, color-coded usage bars, and configurable alerts.
+Sysward reads directly from `/proc` and `/sys` — no external monitoring daemons, no psutil dependency. It collects hardware metrics at two intervals (fast: 1s for CPU/RAM/GPU/sensors/network/battery/fans, slow: 5s for disk/processes/systemd/sysinfo) and displays them across 10 tabbed screens with plotext line charts, gauges, sparklines, color-coded usage bars, and configurable alerts.
 
 It also includes a **performance profile manager** that can switch between `max_performance`, `balanced`, and `powersave` modes by writing CPU governor, turbo boost, and energy performance preference settings directly to sysfs.
 
 ## Features
 
-- **Overview Dashboard** — CPU, RAM, GPU, and battery cards with sparkline graphs, sensor readouts, network throughput, and disk I/O at a glance
-- **CPU Detail** — per-core usage bars, frequency per core, governor, turbo boost state, EPP, temperature history
-- **Memory Detail** — RAM/swap usage with buffer/cache breakdown, zram stats
+- **Overview Dashboard** — btop-inspired layout with CPU/RAM gauges, sparklines, GPU/battery bars, temperature indicators, network throughput, disk I/O, and fan RPM at a glance
+- **CPU Detail** — per-core usage bars, frequency per core, governor, turbo boost state, EPP, real-time plotext line chart with time axis
+- **Memory Detail** — RAM/swap usage with buffer/cache breakdown, zram stats, plotext history chart
 - **Disk Detail** — per-device read/write throughput, mount point usage
-- **Network Detail** — per-interface RX/TX rates, state indicators
+- **Network Detail** — dual-series plotext chart (RX/TX), per-interface rates and state indicators
 - **Process Manager** — sortable/filterable process table with kill (SIGTERM), stop (SIGSTOP), resume (SIGCONT), and process blacklisting
 - **Systemd Services** — filterable service list showing unit state and sub-state
 - **Disk Cleaner** — scan and reclaim disk space from pacman cache, orphaned packages, journal logs, coredumps, trash, user cache, old logs, and backup files — with category selection, detail view, and root operation support via pkexec
+- **System Info** — kernel version, hostname, uptime, CPU model, RAM, GPU info, installed package count, boot time
+- **Fan Speed Monitor** — all detected fans with RPM, real-time RPM history chart, ThinkPad fan control panel with safety guardrails (disabled by default, auto-reset on exit, thermal override)
 - **Performance Profiles** — switch between predefined CPU governor/turbo/EPP profiles via a single keypress
-- **Configurable Alerts** — warnings for high CPU temp, CPU usage, RAM usage, and low battery
+- **Configurable Alerts** — warnings for high CPU temp, CPU usage, RAM usage, low battery, fan failure, and rapid temperature rise
+- **Metric Export** — export all metric history to CSV or JSON with a single keypress
+- **Session Logging** — optional JSONL session logging with automatic rotation for post-mortem analysis
 - **Process Blacklist** — automatically stop or kill processes that match a configured list
 - **6 Built-in Themes** — Tokyo Night, Catppuccin Mocha, Dracula, Nord, Gruvbox Dark, One Dark
 - **TOML Config** — all settings stored in `~/.config/sysward/config.toml`
@@ -80,8 +84,11 @@ sudo sysward
 | Key | Action |
 |-----|--------|
 | `1`-`8` | Switch tabs (Overview, CPU, Memory, Disk, Network, Processes, Services, Cleaner) |
+| `9` | System Info tab |
+| `0` | Fan Speed tab |
 | `p` | Open performance profile selector |
 | `T` | Cycle through themes |
+| `e` | Export metrics to CSV/JSON |
 | `k` | Kill selected process (SIGTERM) |
 | `s` | Stop selected process (SIGSTOP) |
 | `r` | Resume selected process (SIGCONT) |
@@ -114,6 +121,8 @@ cpu_usage_warn = 90
 ram_usage_warn = 85
 battery_low = 20
 battery_critical = 10
+fan_failure_enabled = true
+temp_rise_rate_warn = 10   # °C rise over 30s triggers alert
 
 [profiles.max_performance]
 governor = "performance"
@@ -135,6 +144,21 @@ pacman_keep_versions = 2    # keep N most recent package versions
 journal_max_size = "100M"   # vacuum journal logs to this size
 tmp_max_age_days = 7        # only clean temp files older than N days
 
+[fan_control]
+enabled = false           # must be explicitly enabled
+default_level = "auto"
+safety_temp_limit = 90    # force full-speed above this °C
+
+[export]
+default_format = "csv"    # "csv" or "json"
+default_dir = "~/Documents"
+
+[logging]
+session_logging = false   # enable JSONL session logging
+max_log_size_mb = 5
+log_dir = "~/.local/share/sysward/logs"
+session_log_interval = 5.0
+
 [blacklist]
 # process_name = "stop" or "kill"
 ```
@@ -154,6 +178,8 @@ sysward/
 │   ├── gpu.py             # Intel integrated GPU via sysfs
 │   ├── battery.py         # /sys/class/power_supply
 │   ├── sensors.py         # hwmon temperature + fan RPM
+│   ├── fan.py             # Dedicated fan collector (all hwmon fans + ThinkPad ACPI)
+│   ├── sysinfo.py         # System info (kernel, CPU model, packages — cached)
 │   ├── disk.py            # /proc/diskstats, /proc/mounts
 │   ├── network.py         # /proc/net/dev, sysfs operstate
 │   ├── process.py         # /proc/[pid]/stat + status + cmdline
@@ -163,16 +189,21 @@ sysward/
 │   ├── profile.py         # PerformanceProfile dataclass
 │   ├── clean_item.py      # CleanItem/ScanResult dataclasses for disk cleaner
 │   ├── blacklist_entry.py # Blacklist entry model
-│   └── history.py         # RingBuffer for sparkline data
+│   └── history.py         # RingBuffer with timestamps for chart data
 ├── services/
 │   ├── collector_manager.py  # Orchestrates fast/slow collection cycles
 │   ├── profile_manager.py    # Applies CPU governor/turbo/EPP to sysfs
 │   ├── process_manager.py    # kill/stop/resume via os.kill + blacklist enforcement
 │   ├── disk_cleaner.py       # Disk space scanner and cleaner
-│   ├── alert_manager.py      # Threshold-based alerts with cooldown
-│   └── privilege.py          # Root privilege detection
+│   ├── fan_control.py        # ThinkPad fan control with safety guardrails
+│   ├── alert_manager.py      # Threshold-based alerts with cooldown + fan/temp monitoring
+│   ├── exporter.py           # CSV/JSON metric export
+│   ├── session_logger.py     # JSONL session logging with rotation
+│   └── privilege.py          # Root privilege detection + validated pkexec writes
 ├── widgets/
 │   ├── metric_card.py     # Card with label, bar, sparkline
+│   ├── gauge.py           # Horizontal gauge with color thresholds
+│   ├── line_chart.py      # Dual-mode chart (plotext full / Sparkline compact)
 │   ├── usage_bar.py       # Color-coded usage bar (green/yellow/red)
 │   ├── header_bar.py      # Hostname, CPU model, uptime, active profile
 │   ├── hint_bar.py        # Dynamic keybinding hints
@@ -180,14 +211,16 @@ sysward/
 │   ├── cleaner_table.py   # Disk cleaner category DataTable
 │   └── service_table.py   # Filterable systemd service DataTable
 └── screens/
-    ├── overview.py        # Dashboard with 4 metric cards + info lines
-    ├── cpu_detail.py      # Per-core bars, freq table, sparkline history
-    ├── memory_detail.py   # RAM/swap bars, cache/buffer breakdown
+    ├── overview.py        # btop-style dashboard with gauges + sparklines
+    ├── cpu_detail.py      # Per-core bars, freq table, plotext chart
+    ├── memory_detail.py   # RAM/swap bars, cache/buffer breakdown, plotext chart
     ├── disk_detail.py     # Per-device I/O rates, mount usage
-    ├── network_detail.py  # Per-interface rates
+    ├── network_detail.py  # Dual-series plotext chart (RX/TX), per-interface rates
     ├── process_screen.py  # Process table with filter
     ├── systemd_screen.py  # Service table with filter
     ├── cleaner_screen.py  # Disk cleaner with scan/select/clean workflow
+    ├── sysinfo_screen.py  # System info display (kernel, CPU, RAM, GPU, packages)
+    ├── fan_screen.py      # Fan RPM monitor + ThinkPad control panel
     ├── profile_screen.py  # Profile selector modal
     └── confirm_dialog.py  # Yes/No confirmation dialog
 ```
@@ -196,14 +229,15 @@ sysward/
 
 All collectors inherit from `BaseCollector` and implement `is_available()` and `collect()`. The `CollectorManager` discovers which hardware is present at startup and then runs two background threads:
 
-- **Fast loop** (default 1s): CPU, memory, GPU, battery, sensors, network
-- **Slow loop** (default 5s): disk I/O, processes, systemd services
+- **Fast loop** (default 1s): CPU, memory, GPU, battery, sensors, network, fans
+- **Slow loop** (default 5s): disk I/O, processes, systemd services, system info
 
-Only the active tab's UI is updated each cycle to minimize rendering overhead. Metric history is stored in fixed-size ring buffers for sparkline graphs.
+Only the active tab's UI is updated each cycle to minimize rendering overhead. Metric history is stored in timestamped ring buffers for plotext charts and sparkline graphs.
 
 ## Tech Stack
 
 - **TUI Framework**: [Textual](https://textual.textualize.io/) — modern Python TUI framework with CSS-like styling
+- **Charts**: [textual-plotext](https://github.com/Textualize/textual-plotext) — terminal-based line charts with axes and labels
 - **Rich Text**: [Rich](https://rich.readthedocs.io/) — colored bars and formatted output
 - **Config**: [tomli_w](https://github.com/hukkin/tomli-w) + stdlib `tomllib` — TOML read/write
 - **Data Sources**: Direct reads from `/proc` and `/sys` — zero external dependencies for metrics
@@ -213,6 +247,18 @@ Only the active tab's UI is updated each cycle to minimize rendering overhead. M
 MIT
 
 ## Changelog
+
+### 2026-03-30 — v0.3.0
+- **Real line charts** — replaced sparklines in CPU, Memory, and Network detail tabs with plotext-based charts featuring axes, time labels, and multi-series support (RX/TX)
+- **Overview redesign** — btop-inspired dashboard with horizontal gauges, sparklines, temperature indicators, fan RPM, network throughput, and disk I/O in a responsive grid layout
+- **System Info tab** (key `9`) — kernel version, hostname, uptime, CPU model, RAM, GPU info, installed package count, boot time
+- **Fan Speed tab** (key `0`) — all detected fans with RPM, real-time RPM history chart, ThinkPad fan control with safety guardrails (disabled by default, level 0 rejected, auto-reset on exit, thermal override at 90°C, stale lock detection)
+- **Enhanced alerts** — fan failure detection (RPM=0 at high temp), rapid temperature rise detection
+- **Metric export** (key `e`) — export all metric history to CSV or JSON
+- **Session logging** — optional JSONL session logging with automatic file rotation
+- **Security fix** — input validation for pkexec shell commands in privilege.py (prevents command injection)
+- **Architecture improvements** — timestamped RingBuffer, dict-based tab dispatch, Gauge widget, dual-mode LineChart (compact Sparkline / full plotext)
+- New dependency: `textual-plotext>=1.0.0`
 
 ### 2026-03-27
 

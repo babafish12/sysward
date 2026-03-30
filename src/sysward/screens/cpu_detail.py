@@ -6,8 +6,9 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical, Horizontal
-from textual.widgets import Static, Sparkline, DataTable
+from textual.widgets import Static, DataTable
 
+from sysward.widgets.line_chart import LineChart
 from sysward.widgets.usage_bar import UsageBar
 
 
@@ -23,10 +24,9 @@ class CPUDetailScreen(Vertical):
         height: 3;
         padding: 0 1;
     }
-    CPUDetailScreen #cpu-sparkline {
-        height: 4;
+    CPUDetailScreen #cpu-chart {
+        height: 12;
         margin: 0 1;
-        border: round $panel;
     }
     CPUDetailScreen #core-table {
         margin: 1;
@@ -36,7 +36,7 @@ class CPUDetailScreen(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="cpu-summary")
-        yield Sparkline([], id="cpu-sparkline")
+        yield LineChart("CPU Usage", y_label="%", y_range=(0, 100), id="cpu-chart")
         yield DataTable(id="core-table")
 
     def on_mount(self) -> None:
@@ -71,11 +71,13 @@ class CPUDetailScreen(Vertical):
         except Exception:
             pass
 
-        # Sparkline
+        # Chart
         cpu_hist = history.get("cpu_usage")
         if cpu_hist:
             try:
-                self.query_one("#cpu-sparkline", Sparkline).data = cpu_hist.last_n(300)
+                self.query_one("#cpu-chart", LineChart).update_from_ring(
+                    cpu_hist.last_n_with_time(300), color="cyan"
+                )
             except Exception:
                 pass
 

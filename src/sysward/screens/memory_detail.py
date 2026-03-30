@@ -6,8 +6,9 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.widgets import Static, Sparkline
+from textual.widgets import Static
 
+from sysward.widgets.line_chart import LineChart
 from sysward.widgets.usage_bar import UsageBar
 
 
@@ -32,17 +33,16 @@ class MemoryDetailScreen(Vertical):
         padding: 0 1;
         margin-bottom: 1;
     }
-    MemoryDetailScreen #ram-sparkline {
-        height: 4;
+    MemoryDetailScreen #ram-chart {
+        height: 12;
         margin: 0 1;
-        border: round $panel;
     }
     """
 
     def compose(self) -> ComposeResult:
         yield Static("", classes="mem-section", id="ram-info")
         yield UsageBar("RAM", id="ram-bar")
-        yield Sparkline([], id="ram-sparkline")
+        yield LineChart("RAM Usage", y_label="%", y_range=(0, 100), id="ram-chart")
         yield Static("", classes="mem-section", id="swap-info")
         yield UsageBar("Swap", id="swap-bar")
         yield Static("", classes="mem-section", id="zram-info")
@@ -68,11 +68,13 @@ class MemoryDetailScreen(Vertical):
         except Exception:
             pass
 
-        # Sparkline
+        # Chart
         ram_hist = history.get("ram_usage")
         if ram_hist:
             try:
-                self.query_one("#ram-sparkline", Sparkline).data = ram_hist.last_n(300)
+                self.query_one("#ram-chart", LineChart).update_from_ring(
+                    ram_hist.last_n_with_time(300), color="green"
+                )
             except Exception:
                 pass
 

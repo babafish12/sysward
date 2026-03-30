@@ -27,11 +27,28 @@ def _default_config() -> dict:
             "ram_usage_warn": 85,
             "battery_low": 20,
             "battery_critical": 10,
+            "fan_failure_enabled": True,
+            "temp_rise_rate_warn": 10,
         },
         "cleaner": {
             "pacman_keep_versions": 2,
             "journal_max_size": "100M",
             "tmp_max_age_days": 7,
+        },
+        "export": {
+            "default_format": "csv",
+            "default_dir": "~/Documents",
+        },
+        "logging": {
+            "session_logging": False,
+            "max_log_size_mb": 5,
+            "log_dir": "~/.local/share/sysward/logs",
+            "session_log_interval": 5.0,
+        },
+        "fan_control": {
+            "enabled": False,
+            "default_level": "auto",
+            "safety_temp_limit": 90,
         },
         "blacklist": {},
         "profiles": {
@@ -132,3 +149,33 @@ class ConfigManager:
 
     def get_profile(self, name: str) -> dict | None:
         return self.profiles.get(name)
+
+    # --- Export ---
+
+    @property
+    def export_format(self) -> str:
+        return self._data.get("export", {}).get("default_format", "csv")
+
+    @property
+    def export_dir(self) -> str:
+        return self._data.get("export", {}).get("default_dir", "~/Documents")
+
+    # --- Fan Control ---
+
+    @property
+    def fan_control_enabled(self) -> bool:
+        return self._data.get("fan_control", {}).get("enabled", False)
+
+    @property
+    def fan_control_config(self) -> dict:
+        return self._data.get("fan_control", {})
+
+    # --- Logging ---
+
+    @property
+    def session_logging_enabled(self) -> bool:
+        return self._data.get("logging", {}).get("session_logging", False)
+
+    @property
+    def logging_config(self) -> dict:
+        return self._data.get("logging", {})

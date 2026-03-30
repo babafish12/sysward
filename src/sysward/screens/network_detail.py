@@ -6,7 +6,9 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
-from textual.widgets import Static, Sparkline, DataTable
+from textual.widgets import Static, DataTable
+
+from sysward.widgets.line_chart import LineChart
 
 
 def _fmt_bytes(b: int | float) -> str:
@@ -35,10 +37,9 @@ class NetworkDetailScreen(Vertical):
         height: 1fr;
         padding: 1;
     }
-    NetworkDetailScreen #net-sparkline {
-        height: 4;
+    NetworkDetailScreen #net-chart {
+        height: 12;
         margin: 0 1 1 1;
-        border: round $panel;
     }
     NetworkDetailScreen #iface-table {
         height: 1fr;
@@ -47,8 +48,7 @@ class NetworkDetailScreen(Vertical):
     """
 
     def compose(self) -> ComposeResult:
-        yield Static("Network Throughput (RX)", id="net-label")
-        yield Sparkline([], id="net-sparkline")
+        yield LineChart("Network Throughput", y_label="B/s", id="net-chart")
         yield DataTable(id="iface-table")
 
     def on_mount(self) -> None:
@@ -60,13 +60,17 @@ class NetworkDetailScreen(Vertical):
         net = metrics.get("network", {})
         ifaces = net.get("interfaces", [])
 
-        # Sparkline
+        # Chart
         rx_hist = history.get("net_rx")
-        if rx_hist:
-            try:
-                self.query_one("#net-sparkline", Sparkline).data = rx_hist.last_n(300)
-            except Exception:
-                pass
+        tx_hist = history.get("net_tx")
+        try:
+            chart = self.query_one("#net-chart", LineChart)
+            if rx_hist:
+                chart.update_from_ring(rx_hist.last_n_with_time(300), series_name="RX", color="green")
+            if tx_hist:
+                chart.update_from_ring(tx_hist.last_n_with_time(300), series_name="TX", color="red")
+        except Exception:
+            pass
 
         # Table
         table = self.query_one("#iface-table", DataTable)

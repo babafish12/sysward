@@ -44,7 +44,7 @@ class CleanerTable(DataTable):
         self._selected.clear()
         self.clear()
         for result in results:
-            check = "[x]" if result.category_id in self._selected else "[ ]"
+            check = "[✓]" if result.category_id in self._selected else "[ ]"
             note = "(root)" if result.needs_root else ""
             self.add_row(
                 check,
@@ -95,7 +95,7 @@ class CleanerTable(DataTable):
         """Re-render all rows to update checkboxes."""
         self.clear()
         for result in self._results:
-            check = "[x]" if result.category_id in self._selected else "[ ]"
+            check = "[✓]" if result.category_id in self._selected else "[ ]"
             note = "(root)" if result.needs_root else ""
             self.add_row(
                 check,
